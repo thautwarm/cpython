@@ -1931,6 +1931,77 @@ compiler_lambda(struct compiler *c, expr_ty e)
 }
 
 static int
+compiler_curry(struct compiler *c, expr_ty e, asdl_seq* multistatements)
+{
+    PyCodeObject *co;
+    PyObject *qualname;
+    static identifier name;
+    int kw_default_count = 0;
+    Py_ssize_t arglength;
+    arguments_ty args = e->v.Lambda.args;
+    assert(e->kind == Lambda_kind);
+
+    if (!name) {
+        name = PyUnicode_InternFromString("<lambda>");
+        if (!name)
+            return 0;
+    }
+
+    if (args->defaults)
+        VISIT_SEQ(c, expr, args->defaults);
+    if (args->kwonlyargs) {
+        int res = compiler_visit_kwonlydefaults(c, args->kwonlyargs,
+                                                args->kw_defaults);
+        if (res == 0) return 0;
+        kw_default_count = res - 1;
+    }
+    if (!compiler_enter_scope(c, name, COMPILER_SCOPE_LAMBDA,
+                              (void *)e, e->lineno))
+        return 0;
+
+    /* Make None the first constant, so the lambda can't have a
+       docstring. */
+    if (compiler_add_o(c, c->u->u_consts, Py_None) < 0)
+        return 0;
+
+    c->u->u_argcount = asdl_seq_LEN(args->args);
+    c->u->u_kwonlyargcount = asdl_seq_LEN(args->kwonlyargs);
+
+    if( e->v.Lambda.body->kind == Lambda_kind )
+    {
+         if(!compiler_curry(c, e->v.Lambda.body, multistatements)){
+             return 0;
+         }
+    }
+    else{
+        VISIT_SEQ_IN_SCOPE(c, stmt, multistatements);
+        VISIT_IN_SCOPE(c, expr, e->v.Lambda.body);
+    }
+    
+    if (c->u->u_ste->ste_generator) {
+        co = assemble(c, 0);
+    }
+    else {
+        ADDOP_IN_SCOPE(c, RETURN_VALUE);
+        co = assemble(c, 1);
+    }
+    qualname = c->u->u_qualname;
+    Py_INCREF(qualname);
+    compiler_exit_scope(c);
+    if (co == NULL)
+        return 0;
+
+    arglength = asdl_seq_LEN(args->defaults);
+    arglength |= kw_default_count << 8;
+    compiler_make_closure(c, co, arglength, qualname);
+    Py_DECREF(qualname);
+    Py_DECREF(co);
+
+    return 1;
+}
+
+
+static int
 compiler_if(struct compiler *c, stmt_ty s)
 {
     basicblock *end, *next;
@@ -3925,6 +3996,19 @@ compiler_visit_expr(struct compiler *c, expr_ty e)
         return compiler_list(c, e);
     case Tuple_kind:
         return compiler_tuple(c, e);
+    case Where_kind:
+        if (e->v.Where.target->kind == Lambda_kind)
+            {
+                asdl_seq *multi_statements;
+                multi_statements = e->v.Where.body;
+                return compiler_curry(c, e->v.Where.target, multi_statements);
+            }
+            
+        else{
+            VISIT_SEQ(c, stmt, e->v.Where.body);
+            VISIT(c, expr, e->v.Where.target);
+        }
+        break;
     }
     return 1;
 }
@@ -4333,7 +4417,7 @@ assemble_lnotab(struct assembler *a, struct instr *i)
     d_lineno = i->i_lineno - a->a_lineno;
 
     assert(d_bytecode >= 0);
-    assert(d_lineno >= 0);
+    // assert(d_lineno >= 0);
 
     if(d_bytecode == 0 && d_lineno == 0)
         return 1;
