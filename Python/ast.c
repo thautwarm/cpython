@@ -8,9 +8,41 @@
 #include "node.h"
 #include "ast.h"
 #include "token.h"
-#include "pythonrun.h"
 
 #include <assert.h>
+
+
+// for pattern matching
+#define PM_MODE 0
+#define COMP_MODE 1
+#define UNARY_MODE 2
+#define DUAL_MODE 3
+
+#ifdef Py_DEBUG
+void childrenprint(node* n,int col){
+    int c_num  = NCH(n);
+    int i;
+    if (c_num == 0)
+        {
+        
+        for(i=0; i<col ;++i)
+            printf("   ");
+        printf(" (%s %d) ", n->n_str, n->n_type);
+        printf("\n");
+        }
+    else{
+        
+        for(i=0; i<col ;++i)
+            printf("   ");
+        printf(" (%s %d) ", n->n_str, n->n_type);
+        printf("\n");
+
+        for(i=0; i<c_num ; ++i){
+            childrenprint(CHILD(n, i), col+1);
+        }
+    }
+}
+#endif
 
 static int validate_stmts(asdl_seq *);
 static int validate_exprs(asdl_seq *, expr_context_ty, int);
@@ -589,6 +621,7 @@ struct compiling {
     PyArena *c_arena; /* Arena for allocating memory. */
     PyObject *c_filename; /* filename */
     PyObject *c_normalize; /* Normalization function from unicodedata. */
+    PyObject *c_normalize_args; /* Normalization argument tuple. */
 };
 
 static asdl_seq *seq_for_testlist(struct compiling *, const node *);
@@ -605,7 +638,6 @@ static stmt_ty ast_for_for_stmt(struct compiling *, const node *, int);
 
 /* Note different signature for ast_for_call */
 static expr_ty ast_for_call(struct compiling *, const node *, expr_ty);
-
 static PyObject *parsenumber(struct compiling *, const char *);
 static expr_ty parsestrplus(struct compiling *, const node *n);
 
@@ -623,6 +655,12 @@ init_normalization(struct compiling *c)
     Py_DECREF(m);
     if (!c->c_normalize)
         return 0;
+    c->c_normalize_args = Py_BuildValue("(sN)", "NFKC", Py_None);
+    if (!c->c_normalize_args) {
+        Py_CLEAR(c->c_normalize);
+        return 0;
+    }
+    PyTuple_SET_ITEM(c->c_normalize_args, 1, NULL);
     return 1;
 }
 
@@ -638,29 +676,15 @@ new_identifier(const char *n, struct compiling *c)
        identifier; if so, normalize to NFKC. */
     if (!PyUnicode_IS_ASCII(id)) {
         PyObject *id2;
-        _Py_IDENTIFIER(NFKC);
         if (!c->c_normalize && !init_normalization(c)) {
             Py_DECREF(id);
             return NULL;
         }
-        PyObject *form = _PyUnicode_FromId(&PyId_NFKC);
-        if (form == NULL) {
-            Py_DECREF(id);
-            return NULL;
-        }
-        PyObject *args[2] = {form, id};
-        id2 = _PyObject_FastCall(c->c_normalize, args, 2);
+        PyTuple_SET_ITEM(c->c_normalize_args, 1, id);
+        id2 = PyObject_Call(c->c_normalize, c->c_normalize_args, NULL);
         Py_DECREF(id);
         if (!id2)
             return NULL;
-        if (!PyUnicode_Check(id2)) {
-            PyErr_Format(PyExc_TypeError,
-                         "unicodedata.normalize() must return a string, not "
-                         "%.200s",
-                         Py_TYPE(id2)->tp_name);
-            Py_DECREF(id2);
-            return NULL;
-        }
         id = id2;
     }
     PyUnicode_InternInPlace(&id);
@@ -780,6 +804,7 @@ PyAST_FromNodeObject(const node *n, PyCompilerFlags *flags,
     /* borrowed reference */
     c.c_filename = filename;
     c.c_normalize = NULL;
+    c.c_normalize_args = NULL;
 
     if (TYPE(n) == encoding_decl)
         n = CHILD(n, 0);
@@ -872,6 +897,8 @@ PyAST_FromNodeObject(const node *n, PyCompilerFlags *flags,
  out:
     if (c.c_normalize) {
         Py_DECREF(c.c_normalize);
+        PyTuple_SET_ITEM(c.c_normalize_args, 1, NULL);
+        Py_DECREF(c.c_normalize_args);
     }
     return res;
 }
@@ -1179,7 +1206,6 @@ ast_for_comp_op(struct compiling *c, const node *n)
                     return In;
                 if (strcmp(STR(n), "is") == 0)
                     return Is;
-                /* fall through */
             default:
                 PyErr_Format(PyExc_SystemError, "invalid comp_op: %s",
                              STR(n));
@@ -1194,7 +1220,6 @@ ast_for_comp_op(struct compiling *c, const node *n)
                     return NotIn;
                 if (strcmp(STR(CHILD(n, 0)), "is") == 0)
                     return IsNot;
-                /* fall through */
             default:
                 PyErr_Format(PyExc_SystemError, "invalid comp_op: %s %s",
                              STR(CHILD(n, 0)), STR(CHILD(n, 1)));
@@ -1751,15 +1776,18 @@ ast_for_ifexpr(struct compiling *c, const node *n)
 {
     /* test: or_test 'if' or_test 'else' test */
     expr_ty expression, body, orelse;
-
-    assert(NCH(n) == 5);
+    int children_num = NCH(n);
+    int typeof_idx4 = TYPE(CHILD(n,4));
+    assert( (children_num == 5 && typeof_idx4 == test )  
+          ||(children_num == 6 && typeof_idx4 == NEWLINE)
+          ||(children_num == 7 && typeof_idx4 == INDENT) );
     body = ast_for_expr(c, CHILD(n, 0));
     if (!body)
         return NULL;
     expression = ast_for_expr(c, CHILD(n, 2));
     if (!expression)
         return NULL;
-    orelse = ast_for_expr(c, CHILD(n, 4));
+    orelse = ast_for_expr(c, CHILD(n, children_num-1));
     if (!orelse)
         return NULL;
     return IfExp(expression, body, orelse, LINENO(n), n->n_col_offset,
@@ -2538,6 +2566,54 @@ ast_for_starred(struct compiling *c, const node *n)
     return Starred(tmp, Load, LINENO(n), n->n_col_offset, c->c_arena);
 }
 
+static expr_ty
+ast_for_transform(struct compiling *c, const node *n){
+    expr_ty master, arrow_to, tmp_var;
+    asdl_seq  *where_handler, *tmp_var_seq;
+
+    master = ast_for_expr(c, CHILD(n, 0));
+    if (!master)
+        return NULL;
+
+    PyObject *tmp_name;
+    tmp_name = new_identifier("_", c);
+    if (!tmp_name)
+        return NULL;
+
+    tmp_var = Name(tmp_name, Store, LINENO(n), n->n_col_offset, c->c_arena);
+    tmp_var_seq = _Py_asdl_seq_new(1, c->c_arena);
+    asdl_seq_SET(tmp_var_seq, 0, tmp_var);
+    
+    where_handler = _Py_asdl_seq_new(1, c->c_arena);
+    asdl_seq_SET(where_handler, 0, Assign(tmp_var_seq, master, LINENO(n), n->n_col_offset, c->c_arena));
+
+    arrow_to = ast_for_expr(c, CHILD(n, 2));
+    
+    return Where(arrow_to, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
+}
+
+
+
+static expr_ty
+ast_for_pipeline(struct compiling *c, const node *n){
+    expr_ty obj_called, callfunc, pipe_result;
+    asdl_seq  *arg_seqs;
+    const node* pipe_node;
+    int num, i;
+    pipe_node    = CHILD(n, 3);
+    pipe_result  = ast_for_expr(c, CHILD(n, 0));
+    num          = NCH(pipe_node);
+    for(i=0 ;i < num ; i+=3){
+        callfunc    = ast_for_expr(c, CHILD(pipe_node, i));
+        arg_seqs     = _Py_asdl_seq_new(1, c->c_arena);
+        asdl_seq_SET(arg_seqs, 0, pipe_result);
+        pipe_result = Call(callfunc, arg_seqs, NULL, LINENO(n), n->n_col_offset, c->c_arena);
+    }
+    return pipe_result;
+}
+
+
+
 
 /* Do not name a variable 'expr'!  Will cause a compile error.
 */
@@ -2574,8 +2650,17 @@ ast_for_expr(struct compiling *c, const node *n)
             if (TYPE(CHILD(n, 0)) == lambdef ||
                 TYPE(CHILD(n, 0)) == lambdef_nocond)
                 return ast_for_lambdef(c, CHILD(n, 0));
-            else if (NCH(n) > 1)
-                return ast_for_ifexpr(c, n);
+            else 
+                switch(NCH(n)){
+                    case 3:
+                        return ast_for_transform(c, n);
+                    case 4:
+                        return ast_for_pipeline(c, n);
+                    case 1:
+                        break;
+                    default:
+                        return ast_for_ifexpr(c, n); 
+                }
             /* Fallthrough */
         case or_test:
         case and_test:
@@ -2899,7 +2984,7 @@ ast_for_testlist(struct compiling *c, const node* n)
 }
 
 static stmt_ty
-ast_for_expr_stmt(struct compiling *c, const node *n)
+ast_for_expr_stmt(struct compiling *c, const node *n, asdl_seq* where_handler)
 {
     REQ(n, expr_stmt);
     /* expr_stmt: testlist_star_expr (annassign | augassign (yield_expr|testlist) |
@@ -2915,7 +3000,8 @@ ast_for_expr_stmt(struct compiling *c, const node *n)
         expr_ty e = ast_for_testlist(c, CHILD(n, 0));
         if (!e)
             return NULL;
-
+        if (where_handler)
+            e = Where(e, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
         return Expr(e, LINENO(n), n->n_col_offset, c->c_arena);
     }
     else if (TYPE(CHILD(n, 1)) == augassign) {
@@ -2953,7 +3039,8 @@ ast_for_expr_stmt(struct compiling *c, const node *n)
         newoperator = ast_for_augassign(c, CHILD(n, 1));
         if (!newoperator)
             return NULL;
-
+        if (where_handler)
+            expr2 = Where(expr2, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
         return AugAssign(expr1, newoperator, expr2, LINENO(n), n->n_col_offset, c->c_arena);
     }
     else if (TYPE(CHILD(n, 1)) == annassign) {
@@ -3022,6 +3109,8 @@ ast_for_expr_stmt(struct compiling *c, const node *n)
             if (!expr3) {
                 return NULL;
             }
+            if (where_handler) 
+                expr3 = Where(expr3, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
             return AnnAssign(expr1, expr2, expr3, simple,
                              LINENO(n), n->n_col_offset, c->c_arena);
         }
@@ -3061,6 +3150,8 @@ ast_for_expr_stmt(struct compiling *c, const node *n)
             expression = ast_for_expr(c, value);
         if (!expression)
             return NULL;
+        if (where_handler) 
+            expression = Where(expression, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
         return Assign(targets, expression, LINENO(n), n->n_col_offset, c->c_arena);
     }
 }
@@ -3104,7 +3195,7 @@ ast_for_del_stmt(struct compiling *c, const node *n)
 }
 
 static stmt_ty
-ast_for_flow_stmt(struct compiling *c, const node *n)
+ast_for_flow_stmt(struct compiling *c, const node *n, asdl_seq *where_handler)
 {
     /*
       flow_stmt: break_stmt | continue_stmt | return_stmt | raise_stmt
@@ -3129,15 +3220,20 @@ ast_for_flow_stmt(struct compiling *c, const node *n)
             expr_ty exp = ast_for_expr(c, CHILD(ch, 0));
             if (!exp)
                 return NULL;
+            if (where_handler)
+                exp = Where(exp, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
             return Expr(exp, LINENO(n), n->n_col_offset, c->c_arena);
         }
         case return_stmt:
             if (NCH(ch) == 1)
+
                 return Return(NULL, LINENO(n), n->n_col_offset, c->c_arena);
             else {
                 expr_ty expression = ast_for_testlist(c, CHILD(ch, 1));
                 if (!expression)
                     return NULL;
+                if (where_handler)
+                    expression = Where(expression, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
                 return Return(expression, LINENO(n), n->n_col_offset, c->c_arena);
             }
         case raise_stmt:
@@ -3148,6 +3244,8 @@ ast_for_flow_stmt(struct compiling *c, const node *n)
                 expr_ty expression = ast_for_expr(c, CHILD(ch, 1));
                 if (!expression)
                     return NULL;
+                if (where_handler)
+                    expression = Where(expression, where_handler,LINENO(n), n->n_col_offset, c->c_arena);
                 if (NCH(ch) == 4) {
                     cause = ast_for_expr(c, CHILD(ch, 3));
                     if (!cause)
@@ -3155,7 +3253,6 @@ ast_for_flow_stmt(struct compiling *c, const node *n)
                 }
                 return Raise(expression, cause, LINENO(n), n->n_col_offset, c->c_arena);
             }
-            /* fall through */
         default:
             PyErr_Format(PyExc_SystemError,
                          "unexpected flow_stmt: %d", TYPE(ch));
@@ -3438,7 +3535,7 @@ ast_for_nonlocal_stmt(struct compiling *c, const node *n)
 }
 
 static stmt_ty
-ast_for_assert_stmt(struct compiling *c, const node *n)
+ast_for_assert_stmt(struct compiling *c, const node *n, asdl_seq *where_handler)
 {
     /* assert_stmt: 'assert' test [',' test] */
     REQ(n, assert_stmt);
@@ -3446,6 +3543,8 @@ ast_for_assert_stmt(struct compiling *c, const node *n)
         expr_ty expression = ast_for_expr(c, CHILD(n, 1));
         if (!expression)
             return NULL;
+        if (where_handler)
+            expression = Where(expression, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
         return Assert(expression, NULL, LINENO(n), n->n_col_offset, c->c_arena);
     }
     else if (NCH(n) == 4) {
@@ -3454,10 +3553,13 @@ ast_for_assert_stmt(struct compiling *c, const node *n)
         expr1 = ast_for_expr(c, CHILD(n, 1));
         if (!expr1)
             return NULL;
+        if (where_handler)
+            expr1 = Where(expr1, where_handler, LINENO(n), n->n_col_offset, c->c_arena);
+
         expr2 = ast_for_expr(c, CHILD(n, 3));
         if (!expr2)
             return NULL;
-
+            
         return Assert(expr1, expr2, LINENO(n), n->n_col_offset, c->c_arena);
     }
     PyErr_Format(PyExc_SystemError,
@@ -3650,6 +3752,382 @@ ast_for_if_stmt(struct compiling *c, const node *n)
     PyErr_Format(PyExc_SystemError,
                  "unexpected token in 'if' statement: %s", s);
     return NULL;
+}
+
+
+static expr_ty 
+try_pattern_matching(struct compiling *c, const node *n, expr_ty target, expr_ty to_match, expr_ty to_match_augs, expr_ty func, cmpop_ty _op)
+{
+    const node *comp_node;
+    if (NCH(CHILD(n, 1)) == 3){
+        comp_node = CHILD(CHILD(n, 1), 2);
+        to_match = ast_for_expr(c, CHILD(CHILD(n, 1), 0));
+        if (!to_match)
+            return NULL;
+    }
+    else{
+        comp_node = CHILD(n, 1);
+    }
+
+    asdl_seq  *to_match_seq, *tmp_var_seq;
+    stmt_ty do_assign, do_try, do_if, do_except;
+    asdl_seq* try_body, *try_handler, *try_handler_content,  *where_suite;
+    expr_ty tmp_var, if_test_res, do_if_exp, test_call, to_match_to_load;
+
+    PyObject *tmp_name;
+    
+    expr_ty _py_true  ;
+    _py_true  = NameConstant(Py_True, LINENO(n), n->n_col_offset, c->c_arena);
+    expr_ty _py_false ;
+    _py_false = NameConstant(Py_False, LINENO(n), n->n_col_offset, c->c_arena);
+
+    //do assign
+    if (!set_context(c, to_match, Store, CHILD(n, 1)))
+        return NULL;
+    to_match_seq = _Py_asdl_seq_new(1, c->c_arena);
+    asdl_seq_SET(to_match_seq, 0, to_match);
+    do_assign = Assign(to_match_seq, target, LINENO(n), n->n_col_offset, c->c_arena);
+    
+    tmp_name = new_identifier("__", c);
+    if (!tmp_name)
+        return NULL;
+    tmp_var = Name(tmp_name, Store, LINENO(n), n->n_col_offset, c->c_arena);
+
+    tmp_var_seq = _Py_asdl_seq_new(1, c->c_arena);
+    asdl_seq_SET(tmp_var_seq, 0, tmp_var);
+
+    // do try | do if
+    if (to_match_augs == NULL){
+    do_if = Assign(tmp_var_seq, _py_true, LINENO(n), n->n_col_offset, c->c_arena);
+    }    
+    else{
+        to_match_to_load = ast_for_expr(c, comp_node);
+        if (!to_match_to_load)
+            return NULL;
+
+        asdl_int_seq *ops ;
+        ops = _Py_asdl_int_seq_new(1, c->c_arena);
+        asdl_seq_SET(ops, 0, _op);
+
+        asdl_seq *to_match_augs_seq;
+        to_match_augs_seq = _Py_asdl_seq_new(1, c->c_arena);
+        asdl_seq_SET(to_match_augs_seq, 0, to_match_augs);
+        
+        if (func != NULL){
+            to_match_seq = _Py_asdl_seq_new(1, c->c_arena);
+            if (!set_context(c, to_match_to_load, Load, CHILD(n, 1)))
+                return NULL;
+            asdl_seq_SET(to_match_seq, 0, to_match_to_load);
+            
+            test_call  = Call(func, to_match_seq, NULL, LINENO(n), n->n_col_offset, c->c_arena);
+            if_test_res = Compare(test_call , ops, to_match_augs_seq, LINENO(n), n->n_col_offset, c->c_arena);
+        }
+        else{
+            if_test_res = Compare(to_match_to_load, ops, to_match_augs_seq, LINENO(n), n->n_col_offset, c->c_arena);
+        }
+        do_if_exp = IfExp(if_test_res, _py_true, _py_false, LINENO(n), n->n_col_offset, c->c_arena);
+        do_if = Assign(tmp_var_seq, do_if_exp, LINENO(n), n->n_col_offset, c->c_arena);
+    }        
+
+    try_body = _Py_asdl_seq_new(2, c->c_arena);
+    asdl_seq_SET(try_body, 0, do_assign);
+    asdl_seq_SET(try_body, 1, do_if);
+
+
+    //do except
+    do_except = Assign(tmp_var_seq, _py_false ,LINENO(n), n->n_col_offset, c->c_arena);
+    try_handler_content = _Py_asdl_seq_new(1, c->c_arena);
+    asdl_seq_SET(try_handler_content, 0, do_except);
+
+    try_handler = _Py_asdl_seq_new(1, c->c_arena);
+    asdl_seq_SET(try_handler, 0, ExceptHandler(NULL, NULL, try_handler_content, LINENO(n),
+                             n->n_col_offset, c->c_arena));
+    
+
+    do_try = Try(try_body, try_handler, NULL, NULL, LINENO(n), n->n_col_offset, c->c_arena);
+    where_suite = _Py_asdl_seq_new(1, c->c_arena);
+    asdl_seq_SET(where_suite, 0, do_try);
+    
+    return Where( Name(tmp_name, Load, LINENO(n), n->n_col_offset, c->c_arena)  , where_suite, LINENO(n), n->n_col_offset, c->c_arena);
+}
+
+static stmt_ty
+ast_for_switch_stmt(struct compiling *c, const node *n)
+{
+
+    expr_ty target;
+    target = ast_for_expr(c, CHILD(n,1));
+    if (!target)
+        return NULL;
+    
+    int i, idx_of_case_head,  has_otherwise, case_end;
+
+    const node *branch;
+    node *tmp;
+    expr_ty judge;
+    char *s;
+    int case_type;
+    int case_type_for_each;
+
+    cmpop_ty _op;
+    cmpop_ty _op_for_each;
+
+    expr_ty callfunc;
+    expr_ty callfunc_for_each;
+
+    expr_ty aug_expr = NULL;
+
+    asdl_int_seq *ops;
+    expr_ty _cmp;
+    asdl_seq *cmps;
+    asdl_seq *target_seq;
+    asdl_seq *case_body = NULL;
+    asdl_seq *otherwise_body = NULL;
+    stmt_ty res = NULL;
+
+    case_end = NCH(n);
+    if ( TYPE(CHILD(n, case_end-2)) == case_stmt && NCH(CHILD(n, case_end-2)) == 4  ){
+        case_end = case_end - 2;
+        has_otherwise = 1;
+    }
+    else{
+        case_end = case_end - 1;
+        has_otherwise = 0;
+    }
+
+    // check switch head.
+    branch = CHILD(n, 0);
+    if (NCH(branch) == 1){
+        case_type = COMP_MODE;
+        callfunc  = NULL; 
+        _op = Eq;
+    }
+    else{
+        branch = CHILD(branch, 1);
+        s = STR(CHILD(branch, 0));
+        switch (s[0]){
+            case '[':{
+                case_type = COMP_MODE;
+                if (TYPE(CHILD(branch, 1)) == comp_op)
+                    _op = ast_for_comp_op(c, CHILD(branch, 1));
+                else
+                    _op = Eq;
+                callfunc  = NULL;
+                break;
+            }
+            case '(':{
+                case_type = UNARY_MODE;
+                goto for_expr;
+            }
+            case '{':{
+                case_type = DUAL_MODE;
+                goto for_expr;
+            }
+            case '+':{
+                case_type = PM_MODE;
+                if (TYPE(CHILD(branch, 2)) == test){
+                    callfunc = ast_for_expr(c, CHILD(branch, 2));
+                    _op = Eq;
+                }
+                else if (TYPE(CHILD(branch, 2)) == comp_op){
+                    _op = ast_for_comp_op(c, CHILD(branch, 2));
+                    callfunc = NULL;
+                }
+                else{
+                    _op = Eq;
+                    callfunc = NULL;
+                }
+                break;
+            }
+            case 'c':
+                for_expr:
+                if (TYPE(CHILD(branch, 1)) == test)
+                    callfunc = ast_for_expr(c, CHILD(branch, 1));
+                else
+                    callfunc = NULL;
+                _op = Eq;
+                break;
+        }
+    }
+    if (has_otherwise){
+        branch = CHILD(n, case_end);
+        tmp    = CHILD(CHILD(branch, 0), 0);
+        if (TYPE(tmp) == mode_stmt){
+            PyErr_Format(PyExc_SystemError,
+                                "Syntax Error in Flowpy Gammar: 'otherwise' with a case header !!!");
+            return NULL;
+        }
+        if (strcmp(STR(tmp), "otherwise")){
+            PyErr_Format(PyExc_SystemError,
+                                "Syntax Error in Flowpy Gammar: '%s' should be 'otherwise' !!", STR(tmp));
+            return NULL;
+        }
+        otherwise_body = ast_for_suite(c, CHILD(branch, 3));
+        if (!otherwise_body)
+            return NULL;
+    }
+
+    for(i = case_end-1; i>=5 ;--i){
+        branch = CHILD(n, i);
+        
+        if ((STR(CHILD(branch, 2))[0] == '=' && NCH(branch) != 5) ||
+            (STR(CHILD(branch, 2))[0] == ':' && NCH(branch) != 7)
+            ){
+            PyErr_Format(PyExc_SystemError,
+                                "Syntax Error in Flowpy Gammar: Require an expression to test, use 'case expr => ...' instead of 'case => ...'  !!");
+            return NULL;
+        }
+        if (NCH(branch) == 7){
+            aug_expr = ast_for_expr(c, CHILD(branch, 3));
+            if (!aug_expr)
+                return NULL;
+        }
+        else{
+            aug_expr = NULL;
+        }
+        _cmp = ast_for_expr(c, CHILD(branch, 1));
+        if (!_cmp)
+            return NULL;
+        tmp  = CHILD(branch, 0);
+
+        if (NCH(tmp) == 1){
+            case_type_for_each = case_type;
+            callfunc_for_each = callfunc;
+            _op_for_each = _op;
+           //check the syntax
+           if (strcmp(STR(CHILD(tmp, 0)), "case")){
+                PyErr_Format(PyExc_SystemError,
+                                    "Syntax Error in Flowpy Gammar: '%s' should be 'case' !!", STR(CHILD(branch, 0)) );
+                return NULL;
+            }
+        }
+        else{
+            //check the syntax
+            if (strcmp(STR(CHILD(tmp, NCH(tmp)-1)), "case")){
+                PyErr_Format(PyExc_SystemError,
+                                    "Syntax Error in Flowpy Gammar: '%s' should be 'case' !!", STR(CHILD(branch, 0)) );
+                return NULL;
+            }
+            tmp = CHILD(tmp, 0);
+            idx_of_case_head = 2;
+            s = STR(CHILD(tmp, 0));
+            switch (NCH(tmp)){
+                case 3:{
+                    if ( s[0] == '+' )
+                        goto for_patm_length3;  // for case  "+()"/"+[]"
+                    idx_of_case_head -= 1;
+                }
+                case 4:{ // case "+(test)"/ "+[comp_op]"
+                    if (TYPE(CHILD(tmp,  idx_of_case_head)) == test ){
+                        callfunc_for_each = ast_for_expr(c, CHILD(tmp, idx_of_case_head));
+                        _op_for_each = Eq;
+                    }
+                    else{
+                        _op_for_each   =    ast_for_comp_op(c, CHILD(tmp, idx_of_case_head));
+                        callfunc_for_each = NULL;
+                    }
+                    break;
+                }
+                default: // <>case ... => | []case ...=> | () case ... => 
+                    for_patm_length3:
+                    callfunc_for_each = callfunc;
+                    _op_for_each = _op;
+                    break;
+            }
+            
+            switch (s[0]){
+                case '[':{
+                    case_type_for_each = COMP_MODE;
+                    break;
+                }
+                case '(':{
+                    case_type_for_each = UNARY_MODE;
+                    break;
+                }
+                case '{':{
+                    case_type_for_each = DUAL_MODE;
+                    break;
+                }
+                case '+':{
+                    case_type_for_each = PM_MODE;
+                    break;
+                }
+            }
+        }
+
+        switch( case_type_for_each )
+        {
+            case PM_MODE:{
+                judge = try_pattern_matching(c, branch, target, _cmp, aug_expr, callfunc_for_each, _op_for_each);
+                if (!judge)
+                    return NULL;
+                break;
+            }
+            case COMP_MODE:{
+                ops = _Py_asdl_int_seq_new(1, c->c_arena);
+                asdl_seq_SET(ops, 0, _op_for_each);
+                cmps = _Py_asdl_seq_new(1, c->c_arena);
+                asdl_seq_SET(cmps, 0, _cmp);
+                judge = Compare(target, ops, cmps, LINENO(branch),
+                                branch->n_col_offset, c->c_arena);
+                break;
+            }
+
+            // aug_expr won't be used in COMP_MODE, UNARY_MODE, and DUAL_MODE, we use it as "func(target)"
+            case UNARY_MODE:{
+                ops = _Py_asdl_int_seq_new(1, c->c_arena);
+                _op_for_each = Eq;
+                asdl_seq_SET(ops, 0, _op_for_each);
+
+                cmps = _Py_asdl_seq_new(1, c->c_arena);
+                asdl_seq_SET(cmps, 0, _cmp);
+                
+                target_seq = _Py_asdl_seq_new(1, c->c_arena);
+                asdl_seq_SET(target_seq, 0, target);
+
+                if (!callfunc_for_each){
+                    PyErr_Format(PyExc_SystemError,
+                            "ValueError in Flowpy Gammar: Require an callable object !!");
+                    return NULL;
+                }
+                aug_expr = Call(callfunc_for_each, target_seq, NULL, LINENO(branch),
+                                branch->n_col_offset, c->c_arena);
+                judge = Compare(aug_expr, ops, cmps, LINENO(branch),
+                                branch->n_col_offset, c->c_arena);
+                break;
+            }
+            case DUAL_MODE:{
+                target_seq = _Py_asdl_seq_new(2, c->c_arena);
+                asdl_seq_SET(target_seq, 0, target);
+                asdl_seq_SET(target_seq, 1, _cmp);
+                if (!callfunc_for_each){
+                    PyErr_Format(PyExc_SystemError,
+                            "ValueError in Flowpy Gammar: Require an callable object !!");
+                    return NULL;
+                }
+                judge = Call(callfunc_for_each, target_seq, NULL, LINENO(branch),
+                                branch->n_col_offset, c->c_arena);
+                break;
+            }
+        }
+
+        case_body = ast_for_suite(c, CHILD(branch, NCH(branch)-1));
+
+        if (!res)
+            res = If(judge, case_body, otherwise_body, LINENO(branch),
+                               branch->n_col_offset, c->c_arena);
+        else
+        {
+            otherwise_body = _Py_asdl_seq_new(1, c->c_arena);
+            if (!otherwise_body)
+                return NULL;
+            asdl_seq_SET(otherwise_body, 0, res);
+            res = If(judge, case_body, otherwise_body, LINENO(branch),
+                               branch->n_col_offset, c->c_arena);
+        }
+    }
+    assert(res != NULL);
+    return res;
 }
 
 static stmt_ty
@@ -3910,6 +4388,8 @@ ast_for_with_stmt(struct compiling *c, const node *n, int is_async)
         return With(items, body, LINENO(n), n->n_col_offset, c->c_arena);
 }
 
+
+
 static stmt_ty
 ast_for_classdef(struct compiling *c, const node *n, asdl_seq *decorator_seq)
 {
@@ -3973,14 +4453,58 @@ ast_for_classdef(struct compiling *c, const node *n, asdl_seq *decorator_seq)
 }
 
 static stmt_ty
+ast_for_branch_stmt(struct compiling *c, const node *n)
+{
+    const node *tmp;
+    int total, i;
+    total = NCH(n)/5;
+    expr_ty target;
+    asdl_seq *body;
+    asdl_seq *orelse;
+    stmt_ty res = NULL;
+    for(i = total - 1; i >= 0 ;--i){
+        body   = ast_for_suite(c, CHILD(n, i*5+4));
+        if (!body)
+            return NULL;
+        tmp = CHILD(n, i*5+1);
+
+
+        target = ast_for_expr(c, tmp);
+        
+        if (!target)
+            return NULL;
+        if (!res)
+            res = If(target, body, NULL, LINENO(n), n->n_col_offset, c->c_arena);
+        else{
+            orelse = _Py_asdl_seq_new(1, c->c_arena);
+            asdl_seq_SET(orelse, 0, res);
+            res = If(target,body, orelse, LINENO(n), n->n_col_offset, c->c_arena);
+        }
+    }
+    return res;
+}
+static stmt_ty
 ast_for_stmt(struct compiling *c, const node *n)
 {
     if (TYPE(n) == stmt) {
         assert(NCH(n) == 1);
         n = CHILD(n, 0);
     }
+    asdl_seq *where_handler = NULL;
     if (TYPE(n) == simple_stmt) {
         assert(num_stmts(n) == 1);
+        if (TYPE(CHILD(n , NCH(n)-1)) == where_handler_stmt  )
+        {   
+            const node* handler_node = CHILD(n, NCH(n)-1);
+            if (strcmp(STR(CHILD(handler_node, 0)), "where")){
+                PyErr_Format(PyExc_SystemError,
+                                "KeywordError in Flowpy Gammar: '%s' should be 'where' !!", STR(CHILD(handler_node, 0)));
+                return NULL;
+            } 
+            where_handler = ast_for_suite(c, CHILD(handler_node, 2));
+            if (!where_handler)
+                return NULL;
+        }
         n = CHILD(n, 0);
     }
     if (TYPE(n) == small_stmt) {
@@ -3990,13 +4514,13 @@ ast_for_stmt(struct compiling *c, const node *n)
         */
         switch (TYPE(n)) {
             case expr_stmt:
-                return ast_for_expr_stmt(c, n);
+                return ast_for_expr_stmt(c, n, where_handler);
             case del_stmt:
                 return ast_for_del_stmt(c, n);
             case pass_stmt:
                 return Pass(LINENO(n), n->n_col_offset, c->c_arena);
             case flow_stmt:
-                return ast_for_flow_stmt(c, n);
+                return ast_for_flow_stmt(c, n, where_handler);
             case import_stmt:
                 return ast_for_import_stmt(c, n);
             case global_stmt:
@@ -4004,7 +4528,7 @@ ast_for_stmt(struct compiling *c, const node *n)
             case nonlocal_stmt:
                 return ast_for_nonlocal_stmt(c, n);
             case assert_stmt:
-                return ast_for_assert_stmt(c, n);
+                return ast_for_assert_stmt(c, n, where_handler);
             default:
                 PyErr_Format(PyExc_SystemError,
                              "unhandled small_stmt: TYPE=%d NCH=%d\n",
@@ -4019,6 +4543,8 @@ ast_for_stmt(struct compiling *c, const node *n)
         node *ch = CHILD(n, 0);
         REQ(n, compound_stmt);
         switch (TYPE(ch)) {
+            case switch_stmt:
+                return ast_for_switch_stmt(c, ch);
             case if_stmt:
                 return ast_for_if_stmt(c, ch);
             case while_stmt:
@@ -4037,6 +4563,8 @@ ast_for_stmt(struct compiling *c, const node *n)
                 return ast_for_decorated(c, ch);
             case async_stmt:
                 return ast_for_async_stmt(c, ch);
+            case branch_stmt:
+                return ast_for_branch_stmt(c, ch);
             default:
                 PyErr_Format(PyExc_SystemError,
                              "unhandled small_stmt: TYPE=%d NCH=%d\n",
@@ -4248,55 +4776,6 @@ decode_bytes_with_escapes(struct compiling *c, const node *n, const char *s,
     return result;
 }
 
-/* Shift locations for the given node and all its children by adding `lineno`
-   and `col_offset` to existing locations. */
-static void fstring_shift_node_locations(node *n, int lineno, int col_offset)
-{
-    n->n_col_offset = n->n_col_offset + col_offset;
-    for (int i = 0; i < NCH(n); ++i) {
-        if (n->n_lineno && n->n_lineno < CHILD(n, i)->n_lineno) {
-            /* Shifting column offsets unnecessary if there's been newlines. */
-            col_offset = 0;
-        }
-        fstring_shift_node_locations(CHILD(n, i), lineno, col_offset);
-    }
-    n->n_lineno = n->n_lineno + lineno;
-}
-
-/* Fix locations for the given node and its children.
-
-   `parent` is the enclosing node.
-   `n` is the node which locations are going to be fixed relative to parent.
-   `expr_str` is the child node's string representation, incuding braces.
-*/
-static void
-fstring_fix_node_location(const node *parent, node *n, char *expr_str)
-{
-    char *substr = NULL;
-    char *start;
-    int lines = LINENO(parent) - 1;
-    int cols = parent->n_col_offset;
-    /* Find the full fstring to fix location information in `n`. */
-    while (parent && parent->n_type != STRING)
-        parent = parent->n_child;
-    if (parent && parent->n_str) {
-        substr = strstr(parent->n_str, expr_str);
-        if (substr) {
-            start = substr;
-            while (start > parent->n_str) {
-                if (start[0] == '\n')
-                    break;
-                start--;
-            }
-            cols += substr - start;
-            /* Fix lineno in mulitline strings. */
-            while ((substr = strchr(substr + 1, '\n')))
-                lines--;
-        }
-    }
-    fstring_shift_node_locations(n, lines, cols);
-}
-
 /* Compile this expression in to an expr_ty.  Add parens around the
    expression, in order to allow leading spaces in the expression. */
 static expr_ty
@@ -4305,7 +4784,6 @@ fstring_compile_expr(const char *expr_start, const char *expr_end,
 
 {
     PyCompilerFlags cf;
-    node *mod_n;
     mod_ty mod;
     char *str;
     Py_ssize_t len;
@@ -4315,10 +4793,9 @@ fstring_compile_expr(const char *expr_start, const char *expr_end,
     assert(*(expr_start-1) == '{');
     assert(*expr_end == '}' || *expr_end == '!' || *expr_end == ':');
 
-    /* If the substring is all whitespace, it's an error.  We need to catch this
-       here, and not when we call PyParser_SimpleParseStringFlagsFilename,
-       because turning the expression '' in to '()' would go from being invalid
-       to valid. */
+    /* If the substring is all whitespace, it's an error.  We need to catch
+       this here, and not when we call PyParser_ASTFromString, because turning
+       the expression '' in to '()' would go from being invalid to valid. */
     for (s = expr_start; s != expr_end; s++) {
         char c = *s;
         /* The Python parser ignores only the following whitespace
@@ -4344,19 +4821,9 @@ fstring_compile_expr(const char *expr_start, const char *expr_end,
     str[len+2] = 0;
 
     cf.cf_flags = PyCF_ONLY_AST;
-    mod_n = PyParser_SimpleParseStringFlagsFilename(str, "<fstring>",
-                                                    Py_eval_input, 0);
-    if (!mod_n) {
-        PyMem_RawFree(str);
-        return NULL;
-    }
-    /* Reuse str to find the correct column offset. */
-    str[0] = '{';
-    str[len+1] = '}';
-    fstring_fix_node_location(n, mod_n, str);
-    mod = PyAST_FromNode(mod_n, &cf, "<fstring>", c->c_arena);
+    mod = PyParser_ASTFromString(str, "<fstring>",
+                                 Py_eval_input, &cf, c->c_arena);
     PyMem_RawFree(str);
-    PyNode_Free(mod_n);
     if (!mod)
         return NULL;
     return mod->v.Expression.body;
@@ -5274,3 +5741,5 @@ error:
     FstringParser_Dealloc(&state);
     return NULL;
 }
+
+

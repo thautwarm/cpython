@@ -212,7 +212,7 @@ enum _expr_kind {BoolOp_kind=1, BinOp_kind=2, UnaryOp_kind=3, Lambda_kind=4,
                   FormattedValue_kind=19, JoinedStr_kind=20, Bytes_kind=21,
                   NameConstant_kind=22, Ellipsis_kind=23, Constant_kind=24,
                   Attribute_kind=25, Subscript_kind=26, Starred_kind=27,
-                  Name_kind=28, List_kind=29, Tuple_kind=30};
+                  Name_kind=28, List_kind=29, Tuple_kind=30, Where_kind=31};
 struct _expr {
     enum _expr_kind kind;
     union {
@@ -358,6 +358,11 @@ struct _expr {
             asdl_seq *elts;
             expr_context_ty ctx;
         } Tuple;
+        
+        struct {
+            expr_ty target;
+            asdl_seq *body;
+        } Where;
         
     } v;
     int lineno;
@@ -604,6 +609,9 @@ expr_ty _Py_List(asdl_seq * elts, expr_context_ty ctx, int lineno, int
 #define Tuple(a0, a1, a2, a3, a4) _Py_Tuple(a0, a1, a2, a3, a4)
 expr_ty _Py_Tuple(asdl_seq * elts, expr_context_ty ctx, int lineno, int
                   col_offset, PyArena *arena);
+#define Where(a0, a1, a2, a3, a4) _Py_Where(a0, a1, a2, a3, a4)
+expr_ty _Py_Where(expr_ty target, asdl_seq * body, int lineno, int col_offset,
+                  PyArena *arena);
 #define Slice(a0, a1, a2, a3) _Py_Slice(a0, a1, a2, a3)
 slice_ty _Py_Slice(expr_ty lower, expr_ty upper, expr_ty step, PyArena *arena);
 #define ExtSlice(a0, a1) _Py_ExtSlice(a0, a1)

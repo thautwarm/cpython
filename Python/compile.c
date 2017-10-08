@@ -2110,6 +2110,70 @@ compiler_lambda(struct compiler *c, expr_ty e)
 }
 
 static int
+compiler_curry(struct compiler *c, expr_ty e, asdl_seq* multistatements)
+{
+    PyCodeObject *co;
+    PyObject *qualname;
+    static identifier name;
+    Py_ssize_t funcflags;
+    arguments_ty args = e->v.Lambda.args;
+    assert(e->kind == Lambda_kind);
+
+    if (!name) {
+        name = PyUnicode_InternFromString("<lambda>");
+        if (!name)
+            return 0;
+    }
+
+    funcflags = compiler_default_arguments(c, args);
+    if (funcflags == -1) {
+        return 0;
+    }
+
+    if (!compiler_enter_scope(c, name, COMPILER_SCOPE_LAMBDA,
+                              (void *)e, e->lineno))
+        return 0;
+
+    /* Make None the first constant, so the lambda can't have a
+       docstring. */
+    if (compiler_add_o(c, c->u->u_consts, Py_None) < 0)
+        return 0;
+
+    c->u->u_argcount = asdl_seq_LEN(args->args);
+    c->u->u_kwonlyargcount = asdl_seq_LEN(args->kwonlyargs);
+    
+    if( e->v.Lambda.body->kind == Lambda_kind )
+    {
+         if(!compiler_curry(c, e->v.Lambda.body, multistatements)){
+             return 0;
+         }
+    }
+    else{
+        VISIT_SEQ_IN_SCOPE(c, stmt, multistatements);
+        VISIT_IN_SCOPE(c, expr, e->v.Lambda.body);
+    }
+    if (c->u->u_ste->ste_generator) {
+        co = assemble(c, 0);
+    }
+    else {
+        ADDOP_IN_SCOPE(c, RETURN_VALUE);
+        co = assemble(c, 1);
+    }
+    qualname = c->u->u_qualname;
+    Py_INCREF(qualname);
+    compiler_exit_scope(c);
+    if (co == NULL)
+        return 0;
+
+    compiler_make_closure(c, co, funcflags, qualname);
+    Py_DECREF(qualname);
+    Py_DECREF(co);
+
+    return 1;
+}
+
+
+static int
 compiler_if(struct compiler *c, stmt_ty s)
 {
     basicblock *end, *next;
@@ -4069,7 +4133,6 @@ expr_constant(struct compiler *c, expr_ty e)
         else if (o == Py_False)
             return 0;
     }
-    /* fall through */
     default:
         return -1;
     }
@@ -4362,13 +4425,13 @@ compiler_visit_expr(struct compiler *c, expr_ty e)
         switch (e->v.Attribute.ctx) {
         case AugLoad:
             ADDOP(c, DUP_TOP);
-            /* Fall through */
+            /* Fall through to load */
         case Load:
             ADDOP_NAME(c, LOAD_ATTR, e->v.Attribute.attr, names);
             break;
         case AugStore:
             ADDOP(c, ROT_TWO);
-            /* Fall through */
+            /* Fall through to save */
         case Store:
             ADDOP_NAME(c, STORE_ATTR, e->v.Attribute.attr, names);
             break;
@@ -4429,6 +4492,19 @@ compiler_visit_expr(struct compiler *c, expr_ty e)
         return compiler_list(c, e);
     case Tuple_kind:
         return compiler_tuple(c, e);
+    case Where_kind:
+        if (e->v.Where.target->kind == Lambda_kind)
+            {
+                asdl_seq *multi_statements;
+                multi_statements = e->v.Where.body;
+                return compiler_curry(c, e->v.Where.target, multi_statements);
+            }
+            
+        else{
+            VISIT_SEQ(c, stmt, e->v.Where.body);
+            VISIT(c, expr, e->v.Where.target);
+        }
+        break;
     }
     return 1;
 }

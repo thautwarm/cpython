@@ -355,6 +355,11 @@ static char *Tuple_fields[]={
     "elts",
     "ctx",
 };
+static PyTypeObject *Where_type;
+static char *Where_fields[]={
+    "target",
+    "body",
+};
 static PyTypeObject *expr_context_type;
 static PyObject *Load_singleton, *Store_singleton, *Del_singleton,
 *AugLoad_singleton, *AugStore_singleton, *Param_singleton;
@@ -987,6 +992,8 @@ static int init_types(void)
     if (!List_type) return 0;
     Tuple_type = make_type("Tuple", expr_type, Tuple_fields, 2);
     if (!Tuple_type) return 0;
+    Where_type = make_type("Where", expr_type, Where_fields, 2);
+    if (!Where_type) return 0;
     expr_context_type = make_type("expr_context", &AST_type, NULL, 0);
     if (!expr_context_type) return 0;
     if (!add_attributes(expr_context_type, NULL, 0)) return 0;
@@ -2405,6 +2412,27 @@ Tuple(asdl_seq * elts, expr_context_ty ctx, int lineno, int col_offset, PyArena
     return p;
 }
 
+expr_ty
+Where(expr_ty target, asdl_seq * body, int lineno, int col_offset, PyArena
+      *arena)
+{
+    expr_ty p;
+    if (!target) {
+        PyErr_SetString(PyExc_ValueError,
+                        "field target is required for Where");
+        return NULL;
+    }
+    p = (expr_ty)PyArena_Malloc(arena, sizeof(*p));
+    if (!p)
+        return NULL;
+    p->kind = Where_kind;
+    p->v.Where.target = target;
+    p->v.Where.body = body;
+    p->lineno = lineno;
+    p->col_offset = col_offset;
+    return p;
+}
+
 slice_ty
 Slice(expr_ty lower, expr_ty upper, expr_ty step, PyArena *arena)
 {
@@ -3474,6 +3502,20 @@ ast2obj_expr(void* _o)
         value = ast2obj_expr_context(o->v.Tuple.ctx);
         if (!value) goto failed;
         if (_PyObject_SetAttrId(result, &PyId_ctx, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        break;
+    case Where_kind:
+        result = PyType_GenericNew(Where_type, NULL, NULL);
+        if (!result) goto failed;
+        value = ast2obj_expr(o->v.Where.target);
+        if (!value) goto failed;
+        if (_PyObject_SetAttrId(result, &PyId_target, value) == -1)
+            goto failed;
+        Py_DECREF(value);
+        value = ast2obj_list(o->v.Where.body, ast2obj_stmt);
+        if (!value) goto failed;
+        if (_PyObject_SetAttrId(result, &PyId_body, value) == -1)
             goto failed;
         Py_DECREF(value);
         break;
@@ -6887,6 +6929,57 @@ obj2ast_expr(PyObject* obj, expr_ty* out, PyArena* arena)
         if (*out == NULL) goto failed;
         return 0;
     }
+    isinstance = PyObject_IsInstance(obj, (PyObject*)Where_type);
+    if (isinstance == -1) {
+        return 1;
+    }
+    if (isinstance) {
+        expr_ty target;
+        asdl_seq* body;
+
+        if (_PyObject_HasAttrId(obj, &PyId_target)) {
+            int res;
+            tmp = _PyObject_GetAttrId(obj, &PyId_target);
+            if (tmp == NULL) goto failed;
+            res = obj2ast_expr(tmp, &target, arena);
+            if (res != 0) goto failed;
+            Py_CLEAR(tmp);
+        } else {
+            PyErr_SetString(PyExc_TypeError, "required field \"target\" missing from Where");
+            return 1;
+        }
+        if (_PyObject_HasAttrId(obj, &PyId_body)) {
+            int res;
+            Py_ssize_t len;
+            Py_ssize_t i;
+            tmp = _PyObject_GetAttrId(obj, &PyId_body);
+            if (tmp == NULL) goto failed;
+            if (!PyList_Check(tmp)) {
+                PyErr_Format(PyExc_TypeError, "Where field \"body\" must be a list, not a %.200s", tmp->ob_type->tp_name);
+                goto failed;
+            }
+            len = PyList_GET_SIZE(tmp);
+            body = _Py_asdl_seq_new(len, arena);
+            if (body == NULL) goto failed;
+            for (i = 0; i < len; i++) {
+                stmt_ty val;
+                res = obj2ast_stmt(PyList_GET_ITEM(tmp, i), &val, arena);
+                if (res != 0) goto failed;
+                if (len != PyList_GET_SIZE(tmp)) {
+                    PyErr_SetString(PyExc_RuntimeError, "Where field \"body\" changed size during iteration");
+                    goto failed;
+                }
+                asdl_seq_SET(body, i, val);
+            }
+            Py_CLEAR(tmp);
+        } else {
+            PyErr_SetString(PyExc_TypeError, "required field \"body\" missing from Where");
+            return 1;
+        }
+        *out = Where(target, body, lineno, col_offset, arena);
+        if (*out == NULL) goto failed;
+        return 0;
+    }
 
     PyErr_Format(PyExc_TypeError, "expected some sort of expr, but got %R", obj);
     failed:
@@ -7963,6 +8056,8 @@ PyInit__ast(void)
     if (PyDict_SetItemString(d, "Name", (PyObject*)Name_type) < 0) return NULL;
     if (PyDict_SetItemString(d, "List", (PyObject*)List_type) < 0) return NULL;
     if (PyDict_SetItemString(d, "Tuple", (PyObject*)Tuple_type) < 0) return
+        NULL;
+    if (PyDict_SetItemString(d, "Where", (PyObject*)Where_type) < 0) return
         NULL;
     if (PyDict_SetItemString(d, "expr_context", (PyObject*)expr_context_type) <
         0) return NULL;
