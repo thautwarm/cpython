@@ -41,7 +41,7 @@ small_stmt: (expr_stmt | del_stmt | pass_stmt | flow_stmt |
 expr_stmt: testlist_star_expr (annassign | augassign (yield_expr|testlist) |
                      ('=' (yield_expr|testlist_star_expr))*)
 annassign: ':' test ['=' test]
-testlist_star_expr: (test|star_expr) (',' (test|star_expr))* [',']
+testlist_star_expr: (test|star_expr| dict_unpack) (',' (test|star_expr| dict_unpack))* [',']
 augassign: ('+=' | '-=' | '*=' | '@=' | '/=' | '%=' | '&=' | '|=' | '^=' |
             '<<=' | '>>=' | '**=' | '//=')
 # For normal and annotated assignments, additional restrictions enforced by the interpreter
@@ -108,17 +108,17 @@ atom: ('(' [yield_expr|testlist_comp] ')' |
        '[' [testlist_comp] ']' |
        '{' [dictorsetmaker] '}' |
        NAME | NUMBER | STRING+ | '...' | 'None' | 'True' | 'False')
-testlist_comp: (test|star_expr) ( comp_for | (',' (test|star_expr))* [','] )
+testlist_comp: (test|star_expr|dict_unpack) ( comp_for | (',' (test|star_expr|dict_unpack))* [','] )
 trailer: '(' [arglist] ')' | '[' subscriptlist ']' | '.' NAME
 subscriptlist: subscript (',' subscript)* [',']
 subscript: test | [test] ':' [test] [sliceop]
 sliceop: ':' [test]
-exprlist: (expr|star_expr) (',' (expr|star_expr))* [',']
+exprlist: (expr|star_expr|dict_unpack) (',' (expr|star_expr|dict_unpack))* [',']
 testlist: test (',' test)* [',']
 dictorsetmaker: ( ((test ':' test | '**' expr)
                    (comp_for | (',' (test ':' test | '**' expr))* [','])) |
-                  ((test | star_expr)
-                   (comp_for | (',' (test | star_expr))* [','])) )
+                  ((test | star_expr | dict_unpack)
+                   (comp_for | (',' (test | star_expr | dict_unpack))* [','])) )
 
 classdef: 'class' NAME ['(' [arglist] ')'] ':' suite
 
@@ -148,3 +148,5 @@ encoding_decl: NAME
 
 yield_expr: 'yield' [yield_arg]
 yield_arg: 'from' test | testlist
+
+star_expr: '{' [dictorsetmaker] '}'
