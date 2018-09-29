@@ -570,6 +570,9 @@ static stmt_ty ast_for_stmt(struct compiling *, const node *);
 static asdl_seq *ast_for_suite(struct compiling *c, const node *n);
 static asdl_seq *ast_for_exprlist(struct compiling *, const node *,
                                   expr_context_ty);
+static asdl_seq *ast_for_or_testlist(struct compiling *, const node *,
+                                  expr_context_ty);
+
 static expr_ty ast_for_testlist(struct compiling *, const node *);
 static stmt_ty ast_for_classdef(struct compiling *, const node *, asdl_seq *);
 
@@ -1826,12 +1829,23 @@ ast_for_comprehension(struct compiling *c, const node *n)
         }
         REQ(sync_n, sync_comp_for);
 
+        for_ch = CHILD(sync_n, 3);
+
+        /* Check the # of children rather than the length of t, since
+           (x for x, in ...) has 1 element in t, but still requires a Tuple. */
+        if (NCH(for_ch) == 1)
+            expression = ast_for_expr(c, CHILD(for_ch, 0));
+
+        else {
+            t = ast_for_or_testlist(c, for_ch, Load);
+            if (!t)
+                return NULL;
+            expression = Tuple(t, Load, LINENO(for_ch), for_ch->n_col_offset, c->c_arena);
+        }
+
         for_ch = CHILD(sync_n, 1);
         t = ast_for_exprlist(c, for_ch, Store);
         if (!t)
-            return NULL;
-        expression = ast_for_expr(c, CHILD(sync_n, 3));
-        if (!expression)
             return NULL;
 
         /* Check the # of children rather than the length of t, since
@@ -3078,6 +3092,29 @@ ast_for_exprlist(struct compiling *c, const node *n, expr_context_ty context)
     }
     return seq;
 }
+
+
+static asdl_seq *
+ast_for_or_testlist(struct compiling *c, const node *n, expr_context_ty context)
+{
+    asdl_seq *seq;
+    int i;
+    expr_ty e;
+
+    REQ(n, or_testlist);
+
+    seq = _Py_asdl_seq_new((NCH(n) + 1) / 2, c->c_arena);
+    if (!seq)
+        return NULL;
+    for (i = 0; i < NCH(n); i += 2) {
+        e = ast_for_expr(c, CHILD(n, i));
+        if (!e)
+            return NULL;
+        asdl_seq_SET(seq, i / 2, e);
+    }
+    return seq;
+}
+
 
 static stmt_ty
 ast_for_del_stmt(struct compiling *c, const node *n)
