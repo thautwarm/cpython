@@ -692,8 +692,6 @@ mmap__repr__method(PyObject *self)
     const char *reprfmt;
     const char *access_str;
 
-    Py_ssize_t size = m_obj->size;
-
     switch (m_obj->access) {
         case ACCESS_DEFAULT:
             access_str = "ACCESS_DEFAULT";
@@ -712,51 +710,34 @@ mmap__repr__method(PyObject *self)
             break;
 
         default:
-            PyErr_SetString(PyExc_IOError, "Unknown access mode for mmap object.");
+            PyErr_SetString(PyExc_IOError,
+                            "Unknown access mode for mmap object.");
             return NULL;
     }
 
     const char *tp_name = self->ob_type->tp_name;
+
+    #ifdef UNIX
     int fd = m_obj->fd;
+    #endif
+    #ifdef MS_WINDOWS
+    int fd = m_obj->file_handle;
+    #endif
 
     if (m_obj -> data == NULL) {
-
         reprfmt = "<%s is_closed=True fileno=%d access=%s>";
         repr = PyUnicode_FromFormat(reprfmt, tp_name, fd, access_str);
-
     }
     else {
-
-        const char *data = &m_obj->data;
         Py_ssize_t pos = m_obj->pos;
-
-        PyObject *length = PyLong_FromSize_t(size);
+        PyObject *length = PyLong_FromSize_t(m_obj->size);
         PyObject *offset = PyLong_FromSize_t(pos);
 
-        if (size < 100) {
+        reprfmt = "<%s is_closed=True fileno=%d access=%s "
+                  "length=%R offset=%R>";
 
-            reprfmt = "<%s is_closed=False fileno=%d access=%s length=%R "
-                      "offset=%R entire_contents=%R>";
-
-            PyObject *entire_contents;
-            entire_contents = PyBytes_FromStringAndSize(data, size);
-
-            repr = PyUnicode_FromFormat(reprfmt, tp_name, fd, access_str,
-                                        length, offset, entire_contents);
-
-        }
-        else {
-
-            reprfmt = "<%s is_closed=False fileno=%d access=%s length=%R "
-                      "offset=%R entire_contents=%R ... %R>";
-
-            PyObject *slice1 = PyBytes_FromStringAndSize(data, 50);
-            PyObject *slice2 = PyBytes_FromStringAndSize(data + size - 50,
-                                                         50);
-
-            repr = PyUnicode_FromFormat(reprfmt, tp_name, fd, access_str,
-                                        length, offset, slice1, slice2);
-        }
+        repr = PyUnicode_FromFormat(reprfmt, tp_name, fd,
+                                    access_str, length, offset);
     }
 
     return repr;

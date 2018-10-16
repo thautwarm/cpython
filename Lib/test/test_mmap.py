@@ -332,6 +332,30 @@ class MmapTests(unittest.TestCase):
         mf.close()
         f.close()
 
+    def test_repr(self):
+
+        with open(TESTFN, 'wb') as f:
+            f.write(b'+1')
+        f = open(TESTFN, 'rb+')
+        fileno = f.fileno()
+
+        # test ACCESS_WRITE
+        mf = mmap.mmap(fileno, 0, access=mmap.ACCESS_WRITE)
+        self.assertEqual(repr(mf), f'<mmap.mmap is_closed=False fileno={fileno} access=ACCESS_WRITE length={mf.size()} offset=0')
+        mf.read_bytes()
+        self.assertEqual(repr(mf), f'<mmap.mmap is_closed=False fileno={fileno} access=ACCESS_WRITE length={mf.size()} offset=1')
+        mf.close()
+        self.assertEqual(repr(mf), f'<mmap.mmap is_closed=True fileno={fileno} access=ACCESS_WRITE')
+
+        # test ACCESS_READ
+        mf = mmap.mmap(fileno, 0, access=mmap.ACCESS_READ)
+        self.assertEqual(repr(mf), f'<mmap.mmap is_closed=False fileno={fileno} access=ACCESS_READ length={mf.size()} offset=0')
+        mf.read_bytes()
+        self.assertEqual(repr(mf), f'<mmap.mmap is_closed=False fileno={fileno} access=ACCESS_READ length={mf.size()} offset=1')
+        mf.close()
+        self.assertEqual(repr(mf), f'<mmap.mmap is_closed=True fileno={fileno} access=ACCESS_READ')
+
+
     @unittest.skipUnless(hasattr(os, "stat"), "needs os.stat()")
     def test_length_0_offset(self):
         # Issue #10916: test mapping of remainder of file by passing 0 for
