@@ -682,6 +682,86 @@ mmap__exit__method(PyObject *self, PyObject *args)
     return _PyObject_CallMethodId(self, &PyId_close, NULL);
 }
 
+static PyObject *
+mmap__repr__method(PyObject *self)
+{
+    PyObject *repr;
+    mmap_object *m_obj;
+    m_obj = (mmap_object *) self;
+
+    const char *reprfmt;
+    const char *access_str;
+
+    Py_ssize_t size = m_obj->size;
+
+    switch (m_obj->access) {
+        case ACCESS_DEFAULT:
+            access_str = "ACCESS_DEFAULT";
+            break;
+
+        case ACCESS_READ:
+            access_str = "ACCESS_READ";
+            break;
+
+        case ACCESS_WRITE:
+            access_str = "ACCESS_WRITE";
+            break;
+
+        case ACCESS_COPY:
+            access_str = "ACCESS_COPY";
+            break;
+
+        default:
+            PyErr_SetString(PyExc_IOError, "Unknown access mode for mmap object.");
+            return NULL;
+    }
+
+    const char *tp_name = self->ob_type->tp_name;
+    int fd = m_obj->fd;
+
+    if (m_obj -> data == NULL) {
+
+        reprfmt = "<%s is_closed=True fileno=%d access=%s>";
+        repr = PyUnicode_FromFormat(reprfmt, tp_name, fd, access_str);
+
+    }
+    else {
+
+        const char *data = &m_obj->data;
+        Py_ssize_t pos = m_obj->pos;
+
+        PyObject *length = PyLong_FromSize_t(size);
+        PyObject *offset = PyLong_FromSize_t(pos);
+
+        if (size < 100) {
+
+            reprfmt = "<%s is_closed=False fileno=%d access=%s length=%R "
+                      "offset=%R entire_contents=%R>";
+
+            PyObject *entire_contents;
+            entire_contents = PyBytes_FromStringAndSize(data, size);
+
+            repr = PyUnicode_FromFormat(reprfmt, tp_name, fd, access_str,
+                                        length, offset, entire_contents);
+
+        }
+        else {
+
+            reprfmt = "<%s is_closed=False fileno=%d access=%s length=%R "
+                      "offset=%R entire_contents=%R ... %R>";
+
+            PyObject *slice1 = PyBytes_FromStringAndSize(data, 50);
+            PyObject *slice2 = PyBytes_FromStringAndSize(data + size - 50,
+                                                         50);
+
+            repr = PyUnicode_FromFormat(reprfmt, tp_name, fd, access_str,
+                                        length, offset, slice1, slice2);
+        }
+    }
+
+    return repr;
+}
+
 #ifdef MS_WINDOWS
 static PyObject *
 mmap__sizeof__method(mmap_object *self, void *unused)
@@ -712,6 +792,7 @@ static struct PyMethodDef mmap_object_methods[] = {
     {"write_byte",      (PyCFunction) mmap_write_byte_method,   METH_VARARGS},
     {"__enter__",       (PyCFunction) mmap__enter__method,      METH_NOARGS},
     {"__exit__",        (PyCFunction) mmap__exit__method,       METH_VARARGS},
+    {"__repr__",        (PyCFunction) mmap__repr__method,       METH_NOARGS},
 #ifdef MS_WINDOWS
     {"__sizeof__",      (PyCFunction) mmap__sizeof__method,     METH_NOARGS},
 #endif
@@ -991,7 +1072,7 @@ static PyTypeObject mmap_object_type = {
     0,                                          /* tp_getattr */
     0,                                          /* tp_setattr */
     0,                                          /* tp_reserved */
-    0,                                          /* tp_repr */
+    (reprfunc) mmap__repr__method,              /* tp_repr */
     0,                                          /* tp_as_number */
     &mmap_as_sequence,                          /*tp_as_sequence*/
     &mmap_as_mapping,                           /*tp_as_mapping*/
