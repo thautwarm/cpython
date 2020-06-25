@@ -4860,7 +4860,7 @@ match_stmt_rule(Parser *p)
     return _res;
 }
 
-// case_block: "case" patterns guard? ':' block
+// case_block: "case" star_expressions guard? ':' block
 static match_case_ty
 case_block_rule(Parser *p)
 {
@@ -4871,12 +4871,12 @@ case_block_rule(Parser *p)
     }
     match_case_ty _res = NULL;
     int _mark = p->mark;
-    { // "case" patterns guard? ':' block
+    { // "case" star_expressions guard? ':' block
         if (p->error_indicator) {
             D(p->level--);
             return NULL;
         }
-        D(fprintf(stderr, "%*c> case_block[%d-%d]: %s\n", p->level, ' ', _mark, p->mark, "\"case\" patterns guard? ':' block"));
+        D(fprintf(stderr, "%*c> case_block[%d-%d]: %s\n", p->level, ' ', _mark, p->mark, "\"case\" star_expressions guard? ':' block"));
         expr_ty _keyword;
         Token * _literal;
         asdl_seq* body;
@@ -4885,7 +4885,7 @@ case_block_rule(Parser *p)
         if (
             (_keyword = _PyPegen_expect_soft_keyword(p, "case"))  // soft_keyword='"case"'
             &&
-            (pattern = patterns_rule(p))  // patterns
+            (pattern = star_expressions_rule(p))  // star_expressions
             &&
             (guard = guard_rule(p), 1)  // guard?
             &&
@@ -4894,7 +4894,7 @@ case_block_rule(Parser *p)
             (body = block_rule(p))  // block
         )
         {
-            D(fprintf(stderr, "%*c+ case_block[%d-%d]: %s succeeded!\n", p->level, ' ', _mark, p->mark, "\"case\" patterns guard? ':' block"));
+            D(fprintf(stderr, "%*c+ case_block[%d-%d]: %s succeeded!\n", p->level, ' ', _mark, p->mark, "\"case\" star_expressions guard? ':' block"));
             _res = _Py_match_case ( pattern , guard , body , p -> arena );
             if (_res == NULL && PyErr_Occurred()) {
                 p->error_indicator = 1;
@@ -4905,7 +4905,7 @@ case_block_rule(Parser *p)
         }
         p->mark = _mark;
         D(fprintf(stderr, "%*c%s case_block[%d-%d]: %s failed!\n", p->level, ' ',
-                  p->error_indicator ? "ERROR!" : "-", _mark, p->mark, "\"case\" patterns guard? ':' block"));
+                  p->error_indicator ? "ERROR!" : "-", _mark, p->mark, "\"case\" star_expressions guard? ':' block"));
     }
     _res = NULL;
   done:
@@ -12561,16 +12561,7 @@ primary_raw(Parser *p)
         )
         {
             D(fprintf(stderr, "%*c+ primary[%d-%d]: %s succeeded!\n", p->level, ' ', _mark, p->mark, "'!' NAME"));
-            Token *_token = _PyPegen_get_last_nonnwhitespace_token(p);
-            if (_token == NULL) {
-                D(p->level--);
-                return NULL;
-            }
-            int _end_lineno = _token->end_lineno;
-            UNUSED(_end_lineno); // Only used by EXTRA macro
-            int _end_col_offset = _token->end_col_offset;
-            UNUSED(_end_col_offset); // Only used by EXTRA macro
-            _res = _Py_Attribute ( ( expr_ty ) , b -> v . Name . id , Load , EXTRA );
+            _res = _PyPegen_set_expr_context ( p , b , Store );
             if (_res == NULL && PyErr_Occurred()) {
                 p->error_indicator = 1;
                 D(p->level--);

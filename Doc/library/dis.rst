@@ -772,6 +772,17 @@ iterations of the loop.
    .. versionadded:: 3.10
 
 
+.. opcode:: MATCH_SEQ
+
+   TOS = TOS2(TOS3, TOS1, TOS)
+   stack effect = -3
+   TODO
+
+   .. versionadded:: 3.10
+
+
+
+
 All of the following opcodes use their arguments.
 
 .. opcode:: STORE_NAME (namei)

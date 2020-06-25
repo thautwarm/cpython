@@ -200,7 +200,7 @@ match_stmt[stmt_ty]:
     | "match" target=expression ':' NEWLINE INDENT cases=case_block+ DEDENT {
         _Py_Match(target, cases, EXTRA) }
 case_block[match_case_ty]:
-    | "case" pattern=patterns guard=guard? ':' body=block {
+    | "case" pattern=star_expressions guard=guard? ':' body=block {
         _Py_match_case(pattern, guard, body, p->arena) }
 guard[expr_ty]:
     | 'if' guard=named_expression { guard }

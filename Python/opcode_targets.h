@@ -32,7 +32,7 @@ static void *opcode_targets[256] = {
     &&TARGET_GET_LEN,
     &&TARGET_MATCH_MAP,
     &&TARGET_MATCH_SEQ,
-    &&_unknown_opcode,
+    &&TARGET_MATCH_CALL,
     &&_unknown_opcode,
     &&_unknown_opcode,
     &&_unknown_opcode,

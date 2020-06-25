@@ -3575,6 +3575,33 @@ main_loop:
 #endif
         }
 
+        case TARGET(MATCH_CALL): {
+            PyObject *tmp = THIRD();
+            PyObject *method = PyObject_GetAttrString(tmp, "__match__");
+            if (!method || method == Py_None) {
+                Py_XDECREF(method);
+                _PyErr_Clear(tstate);
+                _PyErr_Format(tstate, PyExc_ImpossibleMatchError,
+                    "type %s cannot be matched",
+                    Py_TYPE(tmp)->tp_name);
+                
+                return NULL;
+            }
+
+            SET_THIRD(FOURTH());
+            SET_FOURTH(method);
+
+            PyObject **sp, *res;
+            sp = stack_pointer;
+            res = call_function(tstate, &sp, 3, NULL);
+            stack_pointer = sp;
+            PUSH(res);
+            if (res == NULL) {
+                goto error;
+            }
+            DISPATCH();
+        }
+
         case TARGET(MATCH): {
             PyObject *names = POP();
             PyObject *type = TOP();
