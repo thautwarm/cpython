@@ -2763,6 +2763,69 @@ compiler_pattern_load(struct compiler *c, expr_ty p, basicblock *fail)
 }
 
 static int
+compiler_pattern_call2(struct compiler *c, expr_ty p, basicblock *fail, PyObject* names) {
+    asdl_seq *args = p->v.Call.args;
+    asdl_seq *kwargs = p->v.Call.keywords;
+    Py_ssize_t nargs = asdl_seq_LEN(args);
+    Py_ssize_t nkwargs = asdl_seq_LEN(kwargs);
+    basicblock *block, *end;
+    CHECK(block = compiler_new_block(c));
+    CHECK(end = compiler_new_block(c));
+    expr_ty func = p->v.Call.func;
+    VISIT(c, expr, func);
+    ADDOP_NAME(c, LOAD_ATTR, PyUnicode_FromString("__match__"), names);
+
+    PyObject *kwnames;
+    CHECK(kwnames = PyTuple_New(nkwargs));
+
+    PyObject *components;
+    CHECK(components = PyTuple_New(nargs + nkwargs));
+
+    Py_ssize_t i;
+    for (i = 0; i < nargs; i++){
+        PyObject *arg = (expr_ty) asdl_seq_GET(args, i);
+        Py_INCREF(arg);
+        
+        PyTuple_SET_ITEM(components, i, arg);
+    }
+
+    for (i = 0; i < nkwargs; i++) {
+        PyObject *name = ((keyword_ty) asdl_seq_GET(kwargs, i))->arg;
+        Py_INCREF(name);
+        
+        int duplicate = PySequence_Contains(kwnames, name);
+        if (duplicate < 0) {
+            return NULL;
+        }
+        if (duplicate) {
+            PyObject *msg = PyUnicode_FromFormat("matching duplicate keyword %U", name);
+            return compiler_error(c, PyUnicode_AsUTF8(msg));
+        }
+
+        PyTuple_SET_ITEM(kwnames, i, name);
+
+        PyObject *elt = ((keyword_ty) asdl_seq_GET(kwargs, i))->value;
+        Py_INCREF(elt);
+
+        PyTuple_SET_ITEM(components, i + nargs, elt);
+    }
+    
+    ADDOP_LOAD_CONST(c, PyLong_FromSize_t(nargs));
+    ADDOP_LOAD_CONST_NEW(c, kwnames);
+
+    ADDOP(c, MATCH_CALL);
+
+    PyObject *tuple_pattern;
+    tuple_pattern = Tuple(
+        components, Store, p->lineno, p->col_offset,
+        p->end_lineno, p->end_col_offset, c->c_arena
+    );
+
+    compiler_pattern_sequence(c, tuple_pattern, fail, names);
+    return 1;
+}
+
+static int
 compiler_pattern_call(struct compiler *c, expr_ty p, basicblock *fail, PyObject* names) {
     asdl_seq *args = p->v.Call.args;
     asdl_seq *kwargs = p->v.Call.keywords;
@@ -3076,7 +3139,7 @@ compiler_pattern(struct compiler *c, expr_ty p, basicblock *fail, PyObject* name
         case BoolOp_kind:
             return compiler_pattern_or(c, p, fail, names);
         case Call_kind:
-            return compiler_pattern_call(c, p, fail, names);
+            return compiler_pattern_call2(c, p, fail, names);
         case Constant_kind:
             return compiler_pattern_load(c, p, fail);
         case Dict_kind:

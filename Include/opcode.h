@@ -33,6 +33,7 @@ extern "C" {
 #define GET_LEN                  30
 #define MATCH_MAP                31
 #define MATCH_SEQ                32
+#define MATCH_CALL               33
 #define RERAISE                  48
 #define WITH_EXCEPT_START        49
 #define GET_AITER                50

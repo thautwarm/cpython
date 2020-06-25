@@ -84,6 +84,7 @@ def_op('INPLACE_TRUE_DIVIDE', 29)
 def_op('GET_LEN', 30)
 def_op('MATCH_MAP', 31)
 def_op('MATCH_SEQ', 32)
+def_op('MATCH_CALL', 33)
 
 def_op('RERAISE', 48)
 def_op('WITH_EXCEPT_START', 49)
