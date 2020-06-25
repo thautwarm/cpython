@@ -43,9 +43,8 @@ are always available.  They are listed here in alphabetical order.
 .. function:: abs(x)
 
    Return the absolute value of a number.  The argument may be an
-   integer or a floating point number.  If the argument is a complex number, its
-   magnitude is returned. If *x* defines :meth:`__abs__`,
-   ``abs(x)`` returns ``x.__abs__()``.
+   integer, a floating point number, or an object implementing :meth:`__abs__`.
+   If the argument is a complex number, its magnitude is returned.
 
 
 .. function:: all(iterable)
@@ -181,8 +180,8 @@ are always available.  They are listed here in alphabetical order.
 .. function:: callable(object)
 
    Return :const:`True` if the *object* argument appears callable,
-   :const:`False` if not.  If this returns true, it is still possible that a
-   call fails, but if it is false, calling *object* will never succeed.
+   :const:`False` if not.  If this returns ``True``, it is still possible that a
+   call fails, but if it is ``False``, calling *object* will never succeed.
    Note that classes are callable (calling a class returns a new instance);
    instances are callable if their class has a :meth:`__call__` method.
 
@@ -473,7 +472,7 @@ are always available.  They are listed here in alphabetical order.
    dictionary is omitted it defaults to the *globals* dictionary.  If both
    dictionaries are omitted, the expression is executed with the *globals* and
    *locals* in the environment where :func:`eval` is called.  Note, *eval()*
-   does not have access to the :term:`nested scope`\s (non-locals) in the
+   does not have access to the :term:`nested scopes <nested scope>` (non-locals) in the
    enclosing environment.
 
    The return value is the result of
@@ -840,19 +839,19 @@ are always available.  They are listed here in alphabetical order.
 
 .. function:: isinstance(object, classinfo)
 
-   Return true if the *object* argument is an instance of the *classinfo*
+   Return ``True`` if the *object* argument is an instance of the *classinfo*
    argument, or of a (direct, indirect or :term:`virtual <abstract base
    class>`) subclass thereof.  If *object* is not
-   an object of the given type, the function always returns false.
+   an object of the given type, the function always returns ``False``.
    If *classinfo* is a tuple of type objects (or recursively, other such
-   tuples), return true if *object* is an instance of any of the types.
+   tuples), return ``True`` if *object* is an instance of any of the types.
    If *classinfo* is not a type or tuple of types and such tuples,
    a :exc:`TypeError` exception is raised.
 
 
 .. function:: issubclass(class, classinfo)
 
-   Return true if *class* is a subclass (direct, indirect or :term:`virtual
+   Return ``True`` if *class* is a subclass (direct, indirect or :term:`virtual
    <abstract base class>`) of *classinfo*.  A
    class is considered a subclass of itself. *classinfo* may be a tuple of class
    objects, in which case every entry in *classinfo* will be checked. In any other
@@ -891,6 +890,11 @@ are always available.  They are listed here in alphabetical order.
    Return the length (the number of items) of an object.  The argument may be a
    sequence (such as a string, bytes, tuple, list, or range) or a collection
    (such as a dictionary, set, or frozen set).
+
+   .. impl-detail::
+
+      ``len`` raises :exc:`OverflowError` on lengths larger than
+      :data:`sys.maxsize`, such as :class:`range(2 ** 100) <range>`.
 
 
 .. _func-list:
@@ -952,7 +956,7 @@ are always available.  They are listed here in alphabetical order.
 
 
 .. _func-memoryview:
-.. function:: memoryview(obj)
+.. class:: memoryview(obj)
    :noindex:
 
    Return a "memory view" object created from the given argument.  See
@@ -1247,7 +1251,7 @@ are always available.  They are listed here in alphabetical order.
 
          * The file is now non-inheritable.
 
-   .. deprecated-removed:: 3.4 4.0
+   .. deprecated-removed:: 3.4 3.10
 
       The ``'U'`` mode.
 
@@ -1306,7 +1310,7 @@ are always available.  They are listed here in alphabetical order.
       the second argument to be negative, permitting computation of modular
       inverses.
 
-   .. versionchanged:: 3.9
+   .. versionchanged:: 3.8
       Allow keyword arguments.  Formerly, only positional arguments were
       supported.
 
@@ -1414,7 +1418,7 @@ are always available.  They are listed here in alphabetical order.
 
 
 .. _func-range:
-.. function:: range(stop)
+.. class:: range(stop)
               range(start, stop[, step])
    :noindex:
 
@@ -1638,7 +1642,7 @@ are always available.  They are listed here in alphabetical order.
                                      # super(C, self).method(arg)
 
    In addition to method lookups, :func:`super` also works for attribute
-   lookups.  One possible use case for this is calling :term:`descriptor`\s
+   lookups.  One possible use case for this is calling :term:`descriptors <descriptor>`
    in a parent or sibling class.
 
    Note that :func:`super` is implemented as part of the binding process for
@@ -1661,7 +1665,7 @@ are always available.  They are listed here in alphabetical order.
 
 
 .. _func-tuple:
-.. function:: tuple([iterable])
+.. class:: tuple([iterable])
    :noindex:
 
    Rather than being a function, :class:`tuple` is actually an immutable
@@ -1716,50 +1720,90 @@ are always available.  They are listed here in alphabetical order.
    dictionary are ignored.
 
 
-.. function:: zip(*iterables)
+.. function:: zip(*iterables, strict=False)
 
-   Make an iterator that aggregates elements from each of the iterables.
+   Iterate over several iterables in parallel, producing tuples with an item
+   from each one.
 
-   Returns an iterator of tuples, where the *i*-th tuple contains
-   the *i*-th element from each of the argument sequences or iterables.  The
-   iterator stops when the shortest input iterable is exhausted. With a single
-   iterable argument, it returns an iterator of 1-tuples.  With no arguments,
-   it returns an empty iterator.  Equivalent to::
+   Example::
 
-        def zip(*iterables):
-            # zip('ABCD', 'xy') --> Ax By
-            sentinel = object()
-            iterators = [iter(it) for it in iterables]
-            while iterators:
-                result = []
-                for it in iterators:
-                    elem = next(it, sentinel)
-                    if elem is sentinel:
-                        return
-                    result.append(elem)
-                yield tuple(result)
+      >>> for item in zip([1, 2, 3], ['sugar', 'spice', 'everything nice']):
+      ...     print(item)
+      ...
+      (1, 'sugar')
+      (2, 'spice')
+      (3, 'everything nice')
 
-   The left-to-right evaluation order of the iterables is guaranteed. This
-   makes possible an idiom for clustering a data series into n-length groups
-   using ``zip(*[iter(s)]*n)``.  This repeats the *same* iterator ``n`` times
-   so that each output tuple has the result of ``n`` calls to the iterator.
-   This has the effect of dividing the input into n-length chunks.
+   More formally: :func:`zip` returns an iterator of tuples, where the *i*-th
+   tuple contains the *i*-th element from each of the argument iterables.
 
-   :func:`zip` should only be used with unequal length inputs when you don't
-   care about trailing, unmatched values from the longer iterables.  If those
-   values are important, use :func:`itertools.zip_longest` instead.
+   Another way to think of :func:`zip` is that it turns rows into columns, and
+   columns into rows.  This is similar to `transposing a matrix
+   <https://en.wikipedia.org/wiki/Transpose>`_.
 
-   :func:`zip` in conjunction with the ``*`` operator can be used to unzip a
-   list::
+   :func:`zip` is lazy: The elements won't be processed until the iterable is
+   iterated on, e.g. by a :keyword:`!for` loop or by wrapping in a
+   :class:`list`.
 
-      >>> x = [1, 2, 3]
-      >>> y = [4, 5, 6]
-      >>> zipped = zip(x, y)
-      >>> list(zipped)
-      [(1, 4), (2, 5), (3, 6)]
-      >>> x2, y2 = zip(*zip(x, y))
-      >>> x == list(x2) and y == list(y2)
-      True
+   One thing to consider is that the iterables passed to :func:`zip` could have
+   different lengths; sometimes by design, and sometimes because of a bug in
+   the code that prepared these iterables.  Python offers three different
+   approaches to dealing with this issue:
+
+   * By default, :func:`zip` stops when the shortest iterable is exhausted.
+     It will ignore the remaining items in the longer iterables, cutting off
+     the result to the length of the shortest iterable::
+
+        >>> list(zip(range(3), ['fee', 'fi', 'fo', 'fum']))
+        [(0, 'fee'), (1, 'fi'), (2, 'fo')]
+
+   * :func:`zip` is often used in cases where the iterables are assumed to be
+     of equal length.  In such cases, it's recommended to use the ``strict=True``
+     option. Its output is the same as regular :func:`zip`::
+
+        >>> list(zip(('a', 'b', 'c'), (1, 2, 3), strict=True))
+        [('a', 1), ('b', 2), ('c', 3)]
+
+     Unlike the default behavior, it checks that the lengths of iterables are
+     identical, raising a :exc:`ValueError` if they aren't:
+
+        >>> list(zip(range(3), ['fee', 'fi', 'fo', 'fum'], strict=True))
+        Traceback (most recent call last):
+          ...
+        ValueError: zip() argument 2 is longer than argument 1
+
+     Without the ``strict=True`` argument, any bug that results in iterables of
+     different lengths will be silenced, possibly mainfesting as a hard-to-find
+     bug in another part of the program.
+
+   * Shorter iterables can be padded with a constant value to make all the
+     iterables have the same length.  This is done by
+     :func:`itertools.zip_longest`.
+
+   Edge cases: With a single iterable argument, :func:`zip` returns an
+   iterator of 1-tuples.  With no arguments, it returns an empty iterator.
+
+   Tips and tricks:
+
+   * The left-to-right evaluation order of the iterables is guaranteed. This
+     makes possible an idiom for clustering a data series into n-length groups
+     using ``zip(*[iter(s)]*n, strict=True)``.  This repeats the *same* iterator
+     ``n`` times so that each output tuple has the result of ``n`` calls to the
+     iterator. This has the effect of dividing the input into n-length chunks.
+
+   * :func:`zip` in conjunction with the ``*`` operator can be used to unzip a
+     list::
+
+        >>> x = [1, 2, 3]
+        >>> y = [4, 5, 6]
+        >>> list(zip(x, y))
+        [(1, 4), (2, 5), (3, 6)]
+        >>> x2, y2 = zip(*zip(x, y))
+        >>> x == list(x2) and y == list(y2)
+        True
+
+   .. versionchanged:: 3.10
+      Added the ``strict`` argument.
 
 
 .. function:: __import__(name, globals=None, locals=None, fromlist=(), level=0)
@@ -1830,6 +1874,9 @@ are always available.  They are listed here in alphabetical order.
       Negative values for *level* are no longer supported (which also changes
       the default value to 0).
 
+   .. versionchanged:: 3.9
+      When the command line options :option:`-E` or :option:`-I` are being used,
+      the environment variable :envvar:`PYTHONCASEOK` is now ignored.
 
 .. rubric:: Footnotes
 
